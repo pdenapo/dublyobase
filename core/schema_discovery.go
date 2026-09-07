@@ -443,18 +443,22 @@ func discoverColumns(ctx context.Context, pool *pgxpool.Pool, schemaName string,
 }
 
 func discoverPrimaryKey(ctx context.Context, pool *pgxpool.Pool, schemaName string, tableName string) ([]string, error) {
+	// pg_catalog rather than information_schema: the SQL-standard constraint
+	// views only expose constraints on tables the role owns or holds a
+	// privilege other than SELECT on, so a read-only role saw every table as
+	// having no primary key and discovery refused to import any of them.
+	// pg_catalog reports the real definition regardless of grants.
 	rows, err := pool.Query(ctx, `
-		select kcu.column_name
-		from information_schema.table_constraints tc
-		join information_schema.key_column_usage kcu
-			on kcu.constraint_schema = tc.constraint_schema
-			and kcu.constraint_name = tc.constraint_name
-			and kcu.table_schema = tc.table_schema
-			and kcu.table_name = tc.table_name
-		where tc.constraint_type = 'PRIMARY KEY'
-			and tc.table_schema = $1
-			and tc.table_name = $2
-		order by kcu.ordinal_position`,
+		select a.attname
+		from pg_constraint c
+		join pg_class t on t.oid = c.conrelid
+		join pg_namespace n on n.oid = t.relnamespace
+		join lateral unnest(c.conkey) with ordinality as k(attnum, ord) on true
+		join pg_attribute a on a.attrelid = t.oid and a.attnum = k.attnum
+		where c.contype = 'p'
+			and n.nspname = $1
+			and t.relname = $2
+		order by k.ord`,
 		schemaName,
 		tableName,
 	)
@@ -474,24 +478,31 @@ func discoverPrimaryKey(ctx context.Context, pool *pgxpool.Pool, schemaName stri
 }
 
 func discoverForeignKeys(ctx context.Context, pool *pgxpool.Pool, schemaName string, tableName string) ([]DiscoveredForeignKey, error) {
+	// pg_catalog for the same visibility reason as the primary key lookup.
+	// Pairing conkey with confkey by ordinality also keeps composite foreign
+	// keys aligned, which the constraint_column_usage join did not guarantee.
 	rows, err := pool.Query(ctx, `
-		select kcu.column_name, ccu.table_schema, ccu.table_name, ccu.column_name, rc.delete_rule
-		from information_schema.table_constraints tc
-		join information_schema.key_column_usage kcu
-			on kcu.constraint_schema = tc.constraint_schema
-			and kcu.constraint_name = tc.constraint_name
-			and kcu.table_schema = tc.table_schema
-			and kcu.table_name = tc.table_name
-		join information_schema.constraint_column_usage ccu
-			on ccu.constraint_schema = tc.constraint_schema
-			and ccu.constraint_name = tc.constraint_name
-		left join information_schema.referential_constraints rc
-			on rc.constraint_schema = tc.constraint_schema
-			and rc.constraint_name = tc.constraint_name
-		where tc.constraint_type = 'FOREIGN KEY'
-			and tc.table_schema = $1
-			and tc.table_name = $2
-		order by kcu.ordinal_position`,
+		select a.attname, fn.nspname, ft.relname, fa.attname,
+			case c.confdeltype
+				when 'a' then 'NO ACTION'
+				when 'r' then 'RESTRICT'
+				when 'c' then 'CASCADE'
+				when 'n' then 'SET NULL'
+				when 'd' then 'SET DEFAULT'
+				else 'NO ACTION'
+			end
+		from pg_constraint c
+		join pg_class t on t.oid = c.conrelid
+		join pg_namespace n on n.oid = t.relnamespace
+		join pg_class ft on ft.oid = c.confrelid
+		join pg_namespace fn on fn.oid = ft.relnamespace
+		join lateral unnest(c.conkey, c.confkey) with ordinality as k(attnum, fattnum, ord) on true
+		join pg_attribute a on a.attrelid = t.oid and a.attnum = k.attnum
+		join pg_attribute fa on fa.attrelid = ft.oid and fa.attnum = k.fattnum
+		where c.contype = 'f'
+			and n.nspname = $1
+			and t.relname = $2
+		order by k.ord`,
 		schemaName,
 		tableName,
 	)
