@@ -201,6 +201,28 @@ Advanced deploys may set `ADMIN_EMAIL` and `ADMIN_PASSWORD` together to seed a
 custom first admin instead. Custom admin passwords must be at least 12
 characters.
 
+#### Required database privileges
+
+The role in `DATABASE_URL` does not need to be a superuser, but it does need
+more than `CONNECT`. Creating a project provisions a schema plus three `NOLOGIN`
+roles (`<slug>_anon`, `<slug>_authenticated`, `<slug>_service`), so the role
+needs `CREATEROLE` in addition to `CREATE` on the database:
+
+```sql
+CREATE ROLE dublyobase LOGIN PASSWORD '...';
+GRANT CREATE, CONNECT ON DATABASE app TO dublyobase;
+ALTER ROLE dublyobase CREATEROLE;
+```
+
+Without `CREATEROLE`, the control plane and its migrations still work — only
+project creation fails, with `insufficient_database_privilege`. `CREATEROLE` is
+narrow on PostgreSQL 16 and later: the role may only alter or drop roles it
+created itself, and cannot grant superuser.
+
+When Dublyobase shares a database with another application, everything it owns
+stays inside the `_dbo` schema and one `proj_<slug>` schema per project, so it
+does not collide with existing tables in `public`.
+
 ## Configuration
 
 All runtime configuration is environment-based. Runtime SMTP and storage settings

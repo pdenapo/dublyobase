@@ -35,4 +35,9 @@ var (
 	ErrUserDisabled     = errors.New("user disabled")
 	ErrUserExists       = errors.New("user exists")
 	ErrValidation       = errors.New("validation failed")
+	// ErrInsufficientDatabasePrivilege is the application role missing a
+	// Postgres privilege an operation requires. It is a deployment
+	// configuration fault rather than a bad request, so the wrapped message
+	// names the grant an operator has to add.
+	ErrInsufficientDatabasePrivilege = errors.New("the database role lacks a required privilege")
 )

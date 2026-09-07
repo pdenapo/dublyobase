@@ -107,6 +107,11 @@ func coreErrorResponse(err error) (int, string, string, map[string]any) {
 		return http.StatusForbidden, "rls_denied", "record access denied by RLS", map[string]any{"policy": "record_access"}
 	case errors.Is(err, core.ErrValidation):
 		return http.StatusUnprocessableEntity, "validation_failed", err.Error(), nil
+	case errors.Is(err, core.ErrInsufficientDatabasePrivilege):
+		// Still a 500 — the deployment is misconfigured, not the request — but
+		// carrying the missing grant so the operator can act without reading
+		// the Postgres log.
+		return http.StatusInternalServerError, "insufficient_database_privilege", err.Error(), nil
 	default:
 		return http.StatusInternalServerError, "internal_error", "internal server error", nil
 	}

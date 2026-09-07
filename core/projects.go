@@ -104,8 +104,16 @@ func ProvisionProject(ctx context.Context, pool *pgxpool.Pool, adminID string, s
 	}
 
 	if err := createProjectDatabaseObjects(ctx, tx, schemaName, roles); err != nil {
-		if code := pgErrCode(err); code == "42P06" || code == "42710" {
+		switch pgErrCode(err) {
+		case "42P06", "42710":
 			return nil, ErrProvisioningConflict
+		case "42501":
+			// Provisioning creates three NOLOGIN roles per project, so the
+			// application login needs CREATEROLE. Postgres reports only
+			// "permission denied to create role", which reached the operator as
+			// an opaque 500 with the real cause visible solely in the database
+			// log. Name the required grant instead.
+			return nil, fmt.Errorf("%w: creating a project requires CREATEROLE on the application database role; grant it with ALTER ROLE <role> CREATEROLE", ErrInsufficientDatabasePrivilege)
 		}
 		return nil, err
 	}
